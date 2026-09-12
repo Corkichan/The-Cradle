@@ -1,6 +1,7 @@
 extends Node2D
 
-## Temporary harness for verifying System 0 (SimulationManager).
+## Temporary harness for verifying System 0 (SimulationManager) and
+## System 0.2 (GameTime).
 ## Delete this script and its node assignment once real gameplay exists.
 
 var _label: Label
@@ -35,6 +36,10 @@ func _process(delta: float) -> void:
 
 	var expected := SimulationManager.TICKS_PER_SECOND * SimulationManager.get_speed()
 	_label.text = "\n".join([
+		"Year %d   Day %d   %s" % [
+			GameTime.get_year(), GameTime.get_day(), GameTime.get_time_string()],
+		"total days %8d" % GameTime.get_total_days(),
+		"",
 		"sim time   %8.2f s" % SimulationManager.get_simulation_time(),
 		"ticks      %8d" % SimulationManager.tick_count,
 		"ticks/sec  %8d   (expected %d)" % [_ticks_last_second, expected],

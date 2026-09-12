@@ -18,6 +18,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 SimulationManager="*res://scripts/core/simulation_manager.gd"
+GameTime="*res://scripts/core/game_time.gd"
 
 [display]
 
