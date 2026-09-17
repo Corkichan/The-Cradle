@@ -65,7 +65,38 @@ func get_positions() -> Array:
 	return _tiles.keys()
 
 
-## Adds a floor tile. Returns the new tile, or null if one already existed there
+## Places floor on an existing EMPTY tile, making it walkable. Returns false if
+## there is no tile there or it already has floor.
+func place_floor(grid_position: Vector2i) -> bool:
+	var tile: DungeonTile = _tiles.get(grid_position)
+	if tile == null or tile.terrain == DungeonTile.Terrain.FLOOR:
+		return false
+	tile.terrain = DungeonTile.Terrain.FLOOR
+	tile.walkable = true
+	return true
+
+
+## Removes the floor from a tile, returning it to EMPTY and unwalkable. Returns
+## false if there is no tile there or it has no floor.
+func remove_floor(grid_position: Vector2i) -> bool:
+	var tile: DungeonTile = _tiles.get(grid_position)
+	if tile == null or tile.terrain != DungeonTile.Terrain.FLOOR:
+		return false
+	tile.terrain = DungeonTile.Terrain.EMPTY
+	tile.walkable = false
+	return true
+
+
+## Number of tiles with floor placed.
+func get_floor_tile_count() -> int:
+	var count := 0
+	for tile in _tiles.values():
+		if tile.terrain == DungeonTile.Terrain.FLOOR:
+			count += 1
+	return count
+
+
+## Adds an EMPTY tile. Returns the new tile, or null if one already existed there
 ## — callers use that to reject double purchases.
 func add_tile(grid_position: Vector2i) -> DungeonTile:
 	if _tiles.has(grid_position):

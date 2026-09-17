@@ -12,8 +12,8 @@ extends Node2D
 const _COLOR_BACKDROP := Color("11131a")
 const _COLOR_TILE_A := Color("242a38")
 const _COLOR_TILE_B := Color("2b3242")
-const _COLOR_BLOCKED_A := Color("6e737b")
-const _COLOR_BLOCKED_B := Color("7c828b")
+const _COLOR_EMPTY_A := Color("6e737b")
+const _COLOR_EMPTY_B := Color("7c828b")
 const _COLOR_GRID_LINE := Color(1, 1, 1, 0.06)
 const _COLOR_MAJOR_LINE := Color(1, 1, 1, 0.18)
 const _COLOR_BORDER := Color("7fd1c8")
@@ -101,11 +101,11 @@ func _draw() -> void:
 			if tile == null:
 				continue
 			var even := (x + y) % 2 == 0
+			# Grey where nothing is built yet, dark where floor has been placed.
+			# The checker is kept either way so individual tiles stay countable.
 			var color := (_COLOR_TILE_A if even else _COLOR_TILE_B)
-			if not tile.walkable:
-				# Blocked tiles read as grey. The checker is kept so individual
-				# tiles stay countable inside a blocked region.
-				color = _COLOR_BLOCKED_A if even else _COLOR_BLOCKED_B
+			if tile.terrain == DungeonTile.Terrain.EMPTY:
+				color = _COLOR_EMPTY_A if even else _COLOR_EMPTY_B
 			var rect := Rect2(dungeon.grid_to_world(pos), cell)
 			draw_rect(rect, color)
 			draw_rect(rect, _COLOR_GRID_LINE if x % _step_for(bounds.size.x) != 0 				and y % _step_for(bounds.size.y) != 0 else _COLOR_MAJOR_LINE, false, thin)

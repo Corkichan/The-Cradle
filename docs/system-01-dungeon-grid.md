@@ -4,6 +4,17 @@
 **Status:** Implemented, verified, **not yet committed**
 **Depends on:** System 0 (Simulation Core), System 0.2 (Game Time) — both unchanged by this work
 
+> ### Partly superseded
+>
+> This documents System 1 **as originally built**. Two later systems changed parts
+> of it. Sections below marked **⚠ SUPERSEDED** are kept as a record and are no
+> longer accurate; follow the link for current behaviour.
+>
+> - [System 1.1 — Tile Expansion](system-01.1-tile-expansion.md) replaced the tile
+>   storage and changed what `is_valid_position` means.
+> - [System 1.2 — Floor Expansion](system-01.2-floor-expansion.md) made `Dungeon`
+>   hold many floors; every query here now answers for the *current* floor.
+
 ---
 
 ## 1. Scope
@@ -15,16 +26,19 @@ will live in. A single dungeon floor as an 8 × 5 tile grid.
 > 8 × 5. Width and height were always independent, so each change was two constants
 > in `Dungeon`; the non-square case is covered by tests.
 
-**Explicitly out of scope and not implemented:** multiple floors, dungeon expansion,
-digging/mining, procedural generation, walls, doors, decorations, environment
-simulation, creature spawning, combat, economy, save/load, dungeon upgrades.
+**Out of scope for System 1:** multiple floors, dungeon expansion, digging/mining,
+procedural generation, walls, doors, decorations, environment simulation, creature
+spawning, combat, economy, save/load, dungeon upgrades.
+
+⚠ **Tile expansion and multiple floors have since been implemented** — see System 1.1
+and 1.2. Everything else on that list remains unbuilt.
 
 **Configuration**
 
 | Setting | Value |
 |---|---|
 | Grid size | 8 × 5 tiles (40 tiles) — **rectangular, not square** |
-| Floors | 1 |
+| Floors | 1 ⚠ (many, since System 1.2) |
 | Tile size | 32 × 32 px |
 | World size | 256 × 160 px |
 | Initial terrain | `FLOOR`, all walkable |
@@ -41,6 +55,9 @@ Dungeon            (RefCounted)  <- the entry point other systems query
 
 DungeonRenderer    (Node2D)      <- reads the model, never writes to it
 ```
+
+⚠ `Dungeon` now holds an ordered list of floors and delegates to the current one.
+The shape of the layering is unchanged — see System 1.2 §2.
 
 ### The separation rule
 
@@ -97,6 +114,10 @@ so multiple dungeons or a save/load flow stay possible later.
 ---
 
 ## 4. Public API
+
+⚠ **SUPERSEDED.** `Dungeon` gained floor management and `get_floor()` now takes an
+index; `DungeonFloor` no longer exposes `width`/`height` as fields. Current API is in
+System 1.1 §4 and System 1.2 §3. Kept below as the System 1 baseline.
 
 ### `Dungeon`
 
@@ -191,10 +212,15 @@ click just outside the top-left corner would silently read as valid tile `(0,0)`
 `floori` maps it to `-1`, which `is_valid_position` correctly rejects. There is a
 regression test pinning this.
 
-### 5.5 Flat row-major tile array
+### 5.5 Flat row-major tile array ⚠ SUPERSEDED
 
 `_tiles[y * width + x]` rather than nested arrays, so all index maths lives in one
 private `_index()` method. Bounds checking happens once in `is_valid_position`.
+
+⚠ **Replaced in System 1.1 by sparse `Dictionary` storage.** A dense array cannot
+represent 41 tiles, because buying one tile at a time produces non-rectangular
+shapes. `is_valid_position` also shifted from "inside the rectangle" to "a tile
+exists here". See System 1.1 §2.
 
 ### 5.6 `grid_to_world` returns the tile's top-left corner
 
@@ -371,7 +397,7 @@ Points a reviewer may want to rule on:
    lookup table wanted, or does each creator set both explicitly?
 3. **Bounds-check cost** — `get_tile()` validates bounds on every call. Irrelevant at
    40 tiles; may want an unchecked fast path for hot loops (pathfinding) later.
-4. **`Dungeon` ownership** — currently owned by the temporary harness scene. Needs a
+4. ✔ *(still open, and larger — see System 1.2 §11.4)* **`Dungeon` ownership** — currently owned by the temporary harness scene. Needs a
    permanent home before System 2. Autoload, a `World` node, or passed explicitly?
 5. **Tile storage** — one `RefCounted` per tile (40 today). Readable and extensible, but if tile
    counts grow by orders of magnitude, parallel `PackedArray`s would be faster. Not a
@@ -394,6 +420,9 @@ Points a reviewer may want to rule on:
 ---
 
 ## Appendix — full source of the data model
+
+⚠ **SUPERSEDED.** This is the System 1 source. `dungeon_floor.gd` was rewritten in
+System 1.1 and `dungeon.gd` in System 1.2; current source is in those documents.
 
 ### `scripts/dungeon/dungeon_tile.gd`
 

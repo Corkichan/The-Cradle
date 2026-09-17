@@ -1,13 +1,17 @@
-[gd_scene load_steps=3 format=3 uid="uid://dx3qbfacg8xg2"]
+[gd_scene load_steps=4 format=3 uid="uid://dx3qbfacg8xg2"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/dungeon/dungeon_renderer.gd" id="2_dungeon_renderer"]
+[ext_resource type="Script" path="res://scripts/creatures/creature_layer.gd" id="3_creature_layer"]
 
 [node name="Node2D" type="Node2D" unique_id=1468060154]
 script = ExtResource("1_main")
 
 [node name="DungeonRenderer" type="Node2D" parent="."]
 script = ExtResource("2_dungeon_renderer")
+
+[node name="CreatureLayer" type="Node2D" parent="."]
+script = ExtResource("3_creature_layer")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 

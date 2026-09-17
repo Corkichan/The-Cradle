@@ -1,16 +1,21 @@
 class_name DungeonExpansion
 extends RefCounted
 
-## Buying new floor tiles for a [Dungeon].
+## Buying dungeon growth: new tiles on the current floor, and whole new floors.
 ##
-## Owns the rules of expansion — which positions are purchasable, what they
-## cost, whether they are affordable — and is the only thing that grows the
-## dungeon. [DungeonTile] knows nothing about money, and [Dungeon] knows nothing
-## about purchasing.
+## Owns the rules of expansion — what is purchasable, what it costs, whether it
+## is affordable — and is the only thing that grows the dungeon. [DungeonTile]
+## knows nothing about money, and [Dungeon] knows nothing about purchasing.
+##
+## Both kinds of purchase spend the SAME gold. There is deliberately one
+## balance, not one per feature.
 
 ## Cost of one tile, in gold. Lives here rather than on the tile so pricing can
 ## change without touching spatial data.
 const DEFAULT_TILE_COST: int = 100
+## Cost of one new floor, in gold. Configurable per instance so no UI code
+## needs to know the number.
+const DEFAULT_FLOOR_COST: int = 5000
 ## Prototype starting balance.
 const STARTING_GOLD: int = 10000
 
@@ -24,13 +29,16 @@ const NEIGHBOUR_OFFSETS: Array[Vector2i] = [
 ## now only so the expansion mechanic can be exercised.
 var gold: int = STARTING_GOLD
 var tile_cost: int = DEFAULT_TILE_COST
+var floor_cost: int = DEFAULT_FLOOR_COST
 
 var _dungeon: Dungeon
 
 
-func _init(dungeon: Dungeon, p_tile_cost: int = DEFAULT_TILE_COST) -> void:
+func _init(dungeon: Dungeon, p_tile_cost: int = DEFAULT_TILE_COST,
+		p_floor_cost: int = DEFAULT_FLOOR_COST) -> void:
 	_dungeon = dungeon
 	tile_cost = p_tile_cost
+	floor_cost = p_floor_cost
 
 
 ## Price of expanding onto [param grid_position]. Flat for now; the position is
@@ -82,3 +90,28 @@ func purchase_tile(grid_position: Vector2i) -> bool:
 	gold -= get_expansion_cost(grid_position)
 	_dungeon.add_tile(grid_position)
 	return true
+
+
+## Price of one new floor.
+func get_floor_cost() -> int:
+	return floor_cost
+
+
+## True if the current balance covers a new floor.
+func can_afford_floor() -> bool:
+	return gold >= floor_cost
+
+
+## Buys a floor and returns its index, or -1 if the balance is short — gold is
+## only spent on success.
+##
+## Deliberately does NOT change the selected floor. Which floor is being looked
+## at is a selection decision; a caller that buys a floor without wanting to
+## jump to it should not be surprised. The debug harness switches explicitly
+## using the returned index.
+func create_floor() -> int:
+	if not can_afford_floor():
+		return -1
+	gold -= floor_cost
+	_dungeon.create_floor()
+	return _dungeon.get_floor_count() - 1

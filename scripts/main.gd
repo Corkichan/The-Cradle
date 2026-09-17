@@ -1,7 +1,8 @@
 extends Node2D
 
 ## Temporary harness for verifying System 0 (SimulationManager), System 0.2
-## (GameTime) and System 1 (Dungeon grid).
+## (GameTime), System 1 (Dungeon grid, tile and floor expansion) and System 2
+## (Creature life).
 ## Delete this script and its node assignment once real gameplay exists.
 
 ## Fraction of the usable viewport the dungeon should occupy, leaving room for
@@ -17,31 +18,37 @@ const _ZOOM_MAX_FACTOR: float = 12.0
 ## Multiplier applied per wheel notch / key press.
 const _ZOOM_STEP: float = 1.15
 
+## Prototype creature. None exist at startup; the player spawns them with S.
+const _RODENT: CreatureSpecies = preload("res://assets/creatures/rodent/maniac_sewer_rat.tres")
+
 ## What a drag does on release.
 enum EditMode {
-	ADD,    ## Fill the area with blocked (grey) tiles.
-	DELETE, ## Clear the area back to walkable floor.
+	PLACE_FLOOR,  ## Build floor on an area so creatures can walk there.
+	REMOVE_FLOOR, ## Strip floor from an area, back to bare EMPTY ground.
 	EXPAND, ## Buy one new floor tile per click.
 }
 
 const _MODE_COLOR := {
-	EditMode.ADD: Color("ffd166"),
-	EditMode.DELETE: Color("ff6b6b"),
+	EditMode.PLACE_FLOOR: Color("ffd166"),
+	EditMode.REMOVE_FLOOR: Color("ff6b6b"),
 	EditMode.EXPAND: Color("6fe08a"),
 }
 
 @onready var _renderer: DungeonRenderer = $DungeonRenderer
+@onready var _creature_layer: CreatureLayer = $CreatureLayer
 @onready var _camera: Camera2D = $Camera2D
 @onready var _hud: CanvasLayer = $HUD
 
 var _dungeon: Dungeon
 var _expansion: DungeonExpansion
+var _creatures: CreatureSystem
+var _floor_bar: HBoxContainer
 var _fit_zoom: float = 1.0
 var _dragging: bool = false
 var _drag_start: Vector2i = Vector2i.ZERO
 ## Current edit mode. Explicit rather than inferred from the tile under the
 ## cursor, so the result of a drag is predictable before it starts.
-var _edit_mode: EditMode = EditMode.ADD
+var _edit_mode: EditMode = EditMode.PLACE_FLOOR
 var _label: Label
 var _ticks_last_second: int = 0
 var _tick_mark: int = 0
@@ -55,17 +62,34 @@ func _ready() -> void:
 	_expansion = DungeonExpansion.new(_dungeon)
 	_renderer.dungeon = _dungeon
 
+	# System 2: creatures are simulated by the system and drawn by the layer.
+	# The dungeon starts empty; each rodent stays on the floor it was spawned on.
+	_creatures = CreatureSystem.new()
+	_creature_layer.current_floor = _dungeon.get_current_floor()
+	_creature_layer.system = _creatures
+
 	_camera.make_current()
 	_reset_view()
 	set_edit_mode(_edit_mode)
 
 	# HUD lives on a CanvasLayer so the camera does not drag it around.
+	# Floor buttons sit above the readout. The container ignores the mouse so
+	# only the buttons themselves swallow clicks; everything else falls through
+	# to the grid.
+	_floor_bar = HBoxContainer.new()
+	_floor_bar.position = Vector2(16, 14)
+	_floor_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_floor_bar.add_theme_constant_override("separation", 6)
+	_hud.add_child(_floor_bar)
+
 	_label = Label.new()
-	_label.position = Vector2(16, 16)
-	_label.add_theme_font_size_override("font_size", 18)
+	_label.position = Vector2(16, 56)
+	_label.add_theme_font_size_override("font_size", 16)
 	_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
 	_label.add_theme_constant_override("shadow_outline_size", 4)
 	_hud.add_child(_label)
+
+	_rebuild_floor_bar()
 
 	SimulationManager.simulation_tick.connect(_on_simulation_tick)
 	SimulationManager.paused_changed.connect(func(p): print("paused -> ", p))
@@ -97,13 +121,21 @@ func _process(delta: float) -> void:
 			GameTime.get_year(), GameTime.get_day(), GameTime.get_time_string()],
 		"total days %8d" % GameTime.get_total_days(),
 		"",
+		"floor      %8s   of %d" % [
+			"%d" % (_dungeon.get_current_floor_index() + 1), _dungeon.get_floor_count()],
 		"dungeon    %8s   (%d tiles)" % [
 			"%dx%d" % [_dungeon.get_width(), _dungeon.get_height()],
 			_dungeon.get_tile_count()],
-		"Gold       %8d   Tile Cost %d" % [_expansion.gold, _expansion.tile_cost],
+		"Rodents    %8d   (%d on this floor)" % [
+			_creatures.get_creature_count(),
+			_creatures.get_creatures_on(_dungeon.get_current_floor()).size()],
+		"Gold       %8d   Tile Cost %d   Floor Cost %d" % [
+			_expansion.gold, _expansion.tile_cost, _expansion.get_floor_cost()],
 		"hover tile %8s   %s" % [
 			str(hover), _describe_hover(hover)],
-		"blocked    %8d   zoom %.2fx" % [_count_blocked(), _camera.zoom.x / _fit_zoom],
+		"floor      %8s   zoom %.2fx" % [
+			"%d/%d" % [_dungeon.get_floor_tile_count(), _dungeon.get_tile_count()],
+			_camera.zoom.x / _fit_zoom],
 		"selection  %8s   %s" % _describe_selection(),
 		"mode       %8s   [tab] to switch" % EditMode.keys()[_edit_mode],
 		"expandable %8d   positions on offer" % _renderer.expandable.size(),
@@ -120,7 +152,8 @@ func _process(delta: float) -> void:
 		"paused     %8s" % SimulationManager.is_paused(),
 		"",
 		"[wheel] or [+]/[-] zoom at cursor   [R] reset view",
-		"[left drag] ADD/DELETE an area   [left click] buy a tile in EXPAND",
+		"[left drag] place/remove floor   [left click] buy a tile in EXPAND",
+		"[S] spawn a rodent here   [L] toggle creature labels",
 		"[space] pause/resume   [1..4] speed 1/2/5/10x",
 		"[F1] cap 10 fps  [F2] cap 30  [F3] uncapped",
 		"[right] single step while paused",
@@ -148,16 +181,8 @@ func _describe_selection() -> Array:
 	var r := _renderer.selection
 	return [
 		"%dx%d=%d" % [r.size.x, r.size.y, r.size.x * r.size.y],
-		"will add grey" if _edit_mode == EditMode.ADD else "will delete grey",
+		"will place floor" if _edit_mode == EditMode.PLACE_FLOOR else "will remove floor",
 	]
-
-
-func _count_blocked() -> int:
-	var n := 0
-	for position in _dungeon.get_positions():
-		if not _dungeon.is_walkable(position):
-			n += 1
-	return n
 
 
 ## Screen pixel -> world pixel for a given zoom, computed directly rather than
@@ -178,6 +203,69 @@ func _zoom_at(screen_position: Vector2, factor: float) -> void:
 	_camera.position = anchor_world 		- (screen_position - get_viewport_rect().size / 2.0) / target
 	_camera.zoom = Vector2.ONE * target
 	_renderer.view_zoom = target
+	_creature_layer.view_zoom = target
+
+
+## Rebuilds the floor buttons. Cheap enough to redo whenever the floor list or
+## the selection changes, which avoids tracking button state separately.
+func _rebuild_floor_bar() -> void:
+	for child in _floor_bar.get_children():
+		child.queue_free()
+		_floor_bar.remove_child(child)
+
+	for index in _dungeon.get_floor_count():
+		var button := Button.new()
+		button.text = "Floor %d" % (index + 1)
+		if index == _dungeon.get_current_floor_index():
+			button.text = "[ %s ]" % button.text
+		# Buttons must never take keyboard focus, or Tab would drive focus
+		# navigation instead of reaching the edit-mode shortcut.
+		button.focus_mode = Control.FOCUS_NONE
+		button.pressed.connect(_switch_floor.bind(index))
+		_floor_bar.add_child(button)
+
+	var build := Button.new()
+	build.text = "Build New Floor - %d Gold" % _expansion.get_floor_cost()
+	build.focus_mode = Control.FOCUS_NONE
+	build.disabled = not _expansion.can_afford_floor()
+	build.pressed.connect(_on_build_floor_pressed)
+	_floor_bar.add_child(build)
+
+
+## Shows another floor. Each floor has its own size and shape, so the view is
+## reframed and the ghost tiles recomputed for the new floor.
+func _switch_floor(index: int) -> void:
+	if not _dungeon.set_current_floor(index):
+		return
+	_refresh_expandable()
+	_rebuild_floor_bar()
+	_reset_view()
+	_renderer.queue_redraw()
+	_creature_layer.current_floor = _dungeon.get_current_floor()
+	print("switched to floor %d (%dx%d, %d tiles)" % [
+		index + 1, _dungeon.get_width(), _dungeon.get_height(),
+		_dungeon.get_tile_count()])
+
+
+func _on_build_floor_pressed() -> void:
+	var index := _expansion.create_floor()
+	if index < 0:
+		print("Not enough Gold (need %d, have %d)"
+			% [_expansion.get_floor_cost(), _expansion.gold])
+		return
+	print("built floor %d for %d gold, balance %d"
+		% [index + 1, _expansion.get_floor_cost(), _expansion.gold])
+	_switch_floor(index)
+
+
+## Debug spawn: one rodent on the floor being viewed, if it has a free tile.
+func _spawn_rodent_here() -> void:
+	var spawned := _creatures.spawn(_RODENT, _dungeon.get_current_floor(), 1)
+	if spawned.is_empty():
+		print("No free tile for a rodent on this floor")
+	else:
+		print("spawned %s #%d at %s on floor %d" % [_RODENT.variant_name, spawned[0].id,
+			spawned[0].grid_position, _dungeon.get_current_floor_index() + 1])
 
 
 ## Viewport minus the strip reserved for the HUD.
@@ -204,6 +292,7 @@ func _reset_view() -> void:
 	_camera.zoom = Vector2.ONE * _fit_zoom
 	_camera.position = world.get_center() 		- (_view_anchor() - get_viewport_rect().size / 2.0) / _fit_zoom
 	_renderer.view_zoom = _fit_zoom
+	_creature_layer.view_zoom = _fit_zoom
 
 
 func set_edit_mode(mode: EditMode) -> void:
@@ -227,6 +316,7 @@ func _try_purchase(grid_position: Vector2i) -> void:
 	if not _expansion.purchase_tile(grid_position):
 		return
 	_refresh_expandable()
+	_rebuild_floor_bar()
 	_renderer.queue_redraw()
 	print("bought %s for %d gold, balance %d, %d tiles"
 		% [grid_position, _expansion.tile_cost, _expansion.gold, _dungeon.get_tile_count()])
@@ -285,14 +375,15 @@ func _end_drag(screen_position: Vector2) -> void:
 	var rect := _rect_between(
 		_drag_start, _clamp_to_grid(_grid_at(screen_position)))
 	_renderer.selection = Rect2i()
-	var walkable := _edit_mode == EditMode.DELETE
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			# Cells inside the bounding box can be empty once the dungeon has
 			# been expanded into a non-rectangular shape.
-			var tile := _dungeon.get_tile(Vector2i(x, y))
-			if tile != null:
-				tile.walkable = walkable
+			var position := Vector2i(x, y)
+			if _edit_mode == EditMode.PLACE_FLOOR:
+				_dungeon.place_floor(position)
+			else:
+				_dungeon.remove_floor(position)
 	_renderer.queue_redraw()
 
 
@@ -343,3 +434,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_reset_view()
 		KEY_TAB:
 			toggle_edit_mode()
+		KEY_S:
+			_spawn_rodent_here()
+		KEY_L:
+			_creature_layer.labels_visible = not _creature_layer.labels_visible
