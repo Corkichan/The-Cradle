@@ -17,6 +17,9 @@ const SUITES: Array[String] = [
 	"res://tests/test_system_1_1_tile_expansion.gd",
 	"res://tests/test_system_1_2_floor_expansion.gd",
 	"res://tests/test_system_2_creatures.gd",
+	"res://tests/test_system_3_food.gd",
+	"res://tests/test_system_4_pee.gd",
+	"res://tests/test_system_5_water.gd",
 ]
 
 
@@ -37,7 +40,15 @@ func _ready() -> void:
 		if only != "" and not path.contains(only):
 			continue
 		ran += 1
-		var suite = load(path).new()
+		var script: GDScript = load(path)
+		# A script with a parse error still loads, it just cannot be instantiated.
+		if script == null or not script.can_instantiate():
+			print("
+%s
+    FAIL suite failed to load (see parse errors above)" % path)
+			total_failed += 1
+			continue
+		var suite = script.new()
 		suite.tree = get_tree()
 		suite.verbose = verbose
 		print("\n%s" % suite.title)

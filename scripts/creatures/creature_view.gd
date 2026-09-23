@@ -76,10 +76,18 @@ func _update_sprite() -> void:
 func _update_label() -> void:
 	if not _label.visible:
 		return
-	_label.text = "%s #%d  %s\nAge %ds  Hunger %d" % [
+	_label.text = "%s #%d  %s\nAge %ds  Hunger %d  Water %d" % [
 		creature.get_species_name(), creature.id, Creature.State.keys()[creature.state],
-		int(creature.age), int(creature.hunger)]
-	_label.modulate = Color("ff8a5b") if creature.is_hungry() else Color.WHITE
+		int(creature.age), int(creature.hunger), int(creature.hydration)]
+	if creature.asleep:
+		_label.modulate = Color("8fb8ff")
+	elif creature.is_thirsty():
+		_label.modulate = Color("5ad2e6")
+	elif creature.is_hungry():
+		_label.modulate = Color("ff8a5b")
+	else:
+		_label.modulate = Color.WHITE
+	_sprite.modulate = Color(0.55, 0.6, 0.8) if creature.asleep else Color.WHITE
 	# Counter the camera so the text stays screen-sized, then sit it above the
 	# sprite, centred.
 	var inverse := 1.0 / view_zoom

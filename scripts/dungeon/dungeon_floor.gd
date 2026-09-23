@@ -14,6 +14,10 @@ extends RefCounted
 ##
 ## Positions may be negative: expanding left or up from the origin is legal.
 
+## Emitted when a tile's urine changes, so a view can update just that tile
+## instead of scanning the floor every frame.
+signal pee_changed(grid_position: Vector2i)
+
 var _tiles: Dictionary = {}
 ## Cached bounding box of every tile. Grown incrementally in [method add_tile];
 ## never shrinks, because tiles are never removed.
@@ -85,6 +89,28 @@ func remove_floor(grid_position: Vector2i) -> bool:
 	tile.terrain = DungeonTile.Terrain.EMPTY
 	tile.walkable = false
 	return true
+
+
+## Adds urine to a tile. Returns false if there is no tile there.
+##
+## The write path lives here, next to [method place_floor], so everything that
+## changes a tile announces it the same way.
+func add_pee(grid_position: Vector2i, amount: float) -> bool:
+	var tile: DungeonTile = _tiles.get(grid_position)
+	if tile == null:
+		return false
+	tile.add_pee(amount)
+	pee_changed.emit(grid_position)
+	return true
+
+
+## Every tile that currently has urine on it.
+func get_peed_positions() -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for position in _tiles:
+		if _tiles[position].has_pee():
+			result.append(position)
+	return result
 
 
 ## Number of tiles with floor placed.

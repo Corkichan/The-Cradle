@@ -20,6 +20,9 @@ enum Terrain {
 var grid_position: Vector2i
 ## What is built here.
 var terrain: Terrain
+## Rodent urine left on this tile. Accumulates and never goes away on its own.
+## Belongs to the tile, not to whichever creature produced it.
+var pee_amount: float = 0.0
 ## Whether creatures may enter. Starts as whatever [member terrain] implies, but
 ## is stored separately so a future system can block a floor tile (occupancy, a
 ## placed object) without inventing a new terrain.
@@ -30,6 +33,15 @@ func _init(p_grid_position: Vector2i, p_terrain: Terrain = Terrain.EMPTY) -> voi
 	grid_position = p_grid_position
 	terrain = p_terrain
 	walkable = p_terrain == Terrain.FLOOR
+
+
+## Adds urine to the tile. Never goes negative.
+func add_pee(amount: float) -> void:
+	pee_amount = maxf(pee_amount + amount, 0.0)
+
+
+func has_pee() -> bool:
+	return pee_amount > 0.0
 
 
 func _to_string() -> String:

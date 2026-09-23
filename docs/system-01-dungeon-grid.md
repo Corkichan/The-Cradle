@@ -14,6 +14,11 @@
 >   storage and changed what `is_valid_position` means.
 > - [System 1.2 — Floor Expansion](system-01.2-floor-expansion.md) made `Dungeon`
 >   hold many floors; every query here now answers for the *current* floor.
+> - [System 1.3 — Floor Placement](system-01.3-floor-placement.md) made tiles start
+>   bare: floor has to be placed before anything can walk on a tile.
+>
+> The dungeon's first inhabitants are documented in
+> [System 2 — Creature Life](system-02-creature-life.md).
 
 ---
 
@@ -30,8 +35,9 @@ will live in. A single dungeon floor as an 8 × 5 tile grid.
 procedural generation, walls, doors, decorations, environment simulation, creature
 spawning, combat, economy, save/load, dungeon upgrades.
 
-⚠ **Tile expansion and multiple floors have since been implemented** — see System 1.1
-and 1.2. Everything else on that list remains unbuilt.
+⚠ **Tile expansion, multiple floors, floor building and creature spawning have since
+been implemented** — see Systems 1.1, 1.2, 1.3 and 2. Everything else on that list
+remains unbuilt.
 
 **Configuration**
 
@@ -41,7 +47,7 @@ and 1.2. Everything else on that list remains unbuilt.
 | Floors | 1 ⚠ (many, since System 1.2) |
 | Tile size | 32 × 32 px |
 | World size | 256 × 160 px |
-| Initial terrain | `FLOOR`, all walkable |
+| Initial terrain | `FLOOR`, all walkable ⚠ (starts `EMPTY` and unwalkable since System 1.3) |
 | Coordinates | `Vector2i`, `(0,0)` to `(7,4)` |
 
 ---
@@ -158,6 +164,8 @@ get_tile_count()                           -> int
 ```
 
 ### `DungeonTile`
+
+⚠ Terrain is now `{ EMPTY, FLOOR }` and tiles start `EMPTY` — see System 1.3.
 
 ```gdscript
 enum Terrain { FLOOR }
@@ -422,7 +430,8 @@ Points a reviewer may want to rule on:
 ## Appendix — full source of the data model
 
 ⚠ **SUPERSEDED.** This is the System 1 source. `dungeon_floor.gd` was rewritten in
-System 1.1 and `dungeon.gd` in System 1.2; current source is in those documents.
+System 1.1, `dungeon.gd` in System 1.2, and `dungeon_tile.gd` in System 1.3; current
+source is in those documents.
 
 ### `scripts/dungeon/dungeon_tile.gd`
 

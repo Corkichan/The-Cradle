@@ -7,16 +7,22 @@ extends RefCounted
 ##   - hold the collection,
 ##   - advance each creature once per [signal SimulationManager.simulation_tick],
 ##   - spawn creatures onto a floor,
-##   - decide whether a step is legal, and pick wander steps.
+##   - decide whether a step is legal, and carry one out.
 ##
 ## Creatures on every floor keep living, whichever floor is being viewed. Which
 ## ones get DRAWN is the renderer's business, not this class's.
 ##
-## The wander choice lives here for now because it is the only behaviour. When a
-## second one arrives (seeking food), pull behaviours out rather than letting
-## this class grow into the place all creature logic lives.
+## WHAT a creature does is [CreatureBehaviour]'s job — this class only says what
+## is possible and makes it happen. The two were split when food arrived and
+## wandering stopped being the only behaviour.
 
 signal creature_spawned(creature: Creature)
+## Emitted after a creature starves. It has already been removed from the system.
+signal creature_died(creature: Creature)
+
+## The food in the world, so creatures can be told where it is. Optional: with
+## no food system, creatures simply wander as they did before.
+var food_system: FoodSystem = null
 
 var _creatures: Array[Creature] = []
 var _next_id: int = 1
@@ -80,7 +86,10 @@ func spawn(species: CreatureSpecies, dungeon_floor: DungeonFloor,
 		var creature := Creature.new(_next_id, species, dungeon_floor, free_tiles[i],
 			_rng.randf_range(0.0, species.initial_hunger_max))
 		_next_id += 1
-		creature.rest(_idle_duration(species))
+		creature.rest(random_idle_duration(species))
+		# Stagger hydration so a group does not get thirsty in unison.
+		creature.hydration = _rng.randf_range(
+			species.thirsty_threshold + 10.0, Creature.MAX_HYDRATION)
 		_creatures.append(creature)
 		spawned.append(creature)
 		creature_spawned.emit(creature)
@@ -123,32 +132,78 @@ func try_move(creature: Creature, target: Vector2i) -> bool:
 	return creature.start_move(target)
 
 
-## Advances every creature by one simulation tick. Connected to
-## [signal SimulationManager.simulation_tick], so it never runs while paused and
-## runs proportionally more often at higher speeds.
-func tick(delta: float) -> void:
+## Advances every creature by one simulation tick, then clears away any that
+## starved. Connected to [signal SimulationManager.simulation_tick], so it never
+## runs while paused and runs proportionally more often at higher speeds.
+##
+## [param hour_of_day] defaults to the game clock; tests pass an hour explicitly
+## so sleeping behaviour does not depend on what time it happens to be.
+func tick(delta: float, hour_of_day: int = -1) -> void:
+	var hour := hour_of_day if hour_of_day >= 0 else GameTime.get_hour()
+	var starved: Array[Creature] = []
 	for creature in _creatures:
-		if creature.advance(delta):
-			creature.rest(_idle_duration(creature.species))
-		elif creature.is_ready_to_move():
-			_wander(creature)
+		var arrived := creature.advance(delta, hour)
+		if not creature.alive:
+			starved.append(creature)
+			continue
+		_leave_pee_if_due(creature)
+		CreatureBehaviour.decide(creature, self, arrived)
+
+	for creature in starved:
+		_creatures.erase(creature)
+		creature_died.emit(creature)
 
 
-## Steps to a random legal neighbour, or rests again if there is none.
-func _wander(creature: Creature) -> void:
+## Urine goes onto the tile the creature is standing on and stays there. The
+## creature produces it and forgets it; the environment keeps it.
+##
+## Driven by the bladder, which fills only from water the body has actually
+## spent, so this cannot fire for a creature that has never drunk.
+func _leave_pee_if_due(creature: Creature) -> void:
+	if not creature.is_urination_due():
+		return
+	creature.dungeon_floor.add_pee(
+		creature.grid_position, creature.species.urination_amount)
+	creature.empty_bladder()
+
+
+## Called on arrival: walk on if the trip has tiles left, otherwise rest.
+func continue_trip(creature: Creature) -> void:
+	if creature.has_steps_left() and not creature.asleep:
+		take_step(creature)
+		if creature.is_moving():
+			return
+	creature.rest(random_idle_duration(creature.species))
+
+
+## Steps to a random legal neighbour, preferring not to double back, so a trip
+## covers ground instead of jittering on the spot. Leaves the creature standing
+## still if it is walled in.
+func take_step(creature: Creature) -> void:
 	var options: Array[Vector2i] = []
 	for direction in Creature.STEP_DIRECTIONS:
 		var target := creature.grid_position + direction
 		if can_move_to(creature, target):
 			options.append(target)
 	if options.is_empty():
-		creature.rest(_idle_duration(creature.species))
 		return
-	creature.start_move(options[_rng.randi_range(0, options.size() - 1)])
+	var onward: Array[Vector2i] = options.filter(
+		func(t: Vector2i) -> bool: return t - creature.grid_position != -creature.facing)
+	var choices := onward if not onward.is_empty() else options
+	creature.start_move(pick_random(choices))
 
 
-func _idle_duration(species: CreatureSpecies) -> float:
+func random_idle_duration(species: CreatureSpecies) -> float:
 	return _rng.randf_range(species.idle_time_min, species.idle_time_max)
+
+
+func random_trip_length(species: CreatureSpecies) -> int:
+	return _rng.randi_range(species.trip_steps_min, species.trip_steps_max)
+
+
+## One of [param options], using the seeded generator so runs are reproducible.
+func pick_random(options: Array[Vector2i]) -> Vector2i:
+	return options[_rng.randi_range(0, options.size() - 1)]
 
 
 ## Fisher-Yates with the seeded generator, so spawn positions are reproducible.

@@ -20,6 +20,9 @@ const _ZOOM_STEP: float = 1.15
 
 ## Prototype creature. None exist at startup; the player spawns them with S.
 const _RODENT: CreatureSpecies = preload("res://assets/creatures/rodent/maniac_sewer_rat.tres")
+## Food sources dropped in at startup. None can be placed until floor exists, so
+## on a fresh dungeon this quietly does nothing and [F] is how food arrives.
+const _STARTING_FOOD: int = 4
 
 ## What a drag does on release.
 enum EditMode {
@@ -36,12 +39,17 @@ const _MODE_COLOR := {
 
 @onready var _renderer: DungeonRenderer = $DungeonRenderer
 @onready var _creature_layer: CreatureLayer = $CreatureLayer
+@onready var _food_layer: FoodLayer = $FoodLayer
+@onready var _pee_layer: PeeLayer = $PeeLayer
 @onready var _camera: Camera2D = $Camera2D
 @onready var _hud: CanvasLayer = $HUD
 
 var _dungeon: Dungeon
 var _expansion: DungeonExpansion
 var _creatures: CreatureSystem
+var _food: FoodSystem
+var _starved: int = 0
+var _controls: Label
 var _floor_bar: HBoxContainer
 var _fit_zoom: float = 1.0
 var _dragging: bool = false
@@ -68,6 +76,24 @@ func _ready() -> void:
 	_creature_layer.current_floor = _dungeon.get_current_floor()
 	_creature_layer.system = _creatures
 
+	# System 3: food is part of the world, not part of any creature. The creature
+	# system is given a reference so creatures can notice it.
+	_food = FoodSystem.new()
+	_creatures.food_system = _food
+	_food_layer.current_floor = _dungeon.get_current_floor()
+	_food_layer.system = _food
+	_pee_layer.current_floor = _dungeon.get_current_floor()
+	_food.food_depleted.connect(func(f: FoodSource) -> void:
+		print("food #%d at %s was finished off" % [f.id, f.grid_position]))
+	var initial_food := _food.place_random(_dungeon.get_current_floor(), _STARTING_FOOD,
+		FoodSource.DEFAULT_AMOUNT, FoodSource.DEFAULT_NUTRITION, _creatures)
+	if initial_food.is_empty():
+		print("No floor yet, so no food placed - build some floor, then press F")
+	_creatures.creature_died.connect(func(c: Creature) -> void:
+		_starved += 1
+		print("Rodent #%d starved to death at %s, aged %ds" % [
+			c.id, c.grid_position, int(c.age)]))
+
 	_camera.make_current()
 	_reset_view()
 	set_edit_mode(_edit_mode)
@@ -84,10 +110,21 @@ func _ready() -> void:
 
 	_label = Label.new()
 	_label.position = Vector2(16, 56)
-	_label.add_theme_font_size_override("font_size", 16)
-	_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
-	_label.add_theme_constant_override("shadow_outline_size", 4)
+	_style_readout(_label)
 	_hud.add_child(_label)
+
+	# The controls are pinned to the bottom of the window rather than following
+	# the readout, so they stay visible however short the window is and however
+	# many lines the readout grows to.
+	_controls = Label.new()
+	_style_readout(_controls)
+	_controls.text = "\n".join([
+		"[S] rodent   [F] food   [W] water   [L] labels   [V] search area",
+		"[tab] mode   [left drag] place/remove floor   [left click] buy in EXPAND",
+		"[space] pause   [1..4] speed 1/2/5/10x   [right] step while paused",
+		"[wheel] or [+]/[-] zoom at cursor   [R] reset view   [F1/F2/F3] fps cap",
+	])
+	_hud.add_child(_controls)
 
 	_rebuild_floor_bar()
 
@@ -100,7 +137,21 @@ func _on_simulation_tick(_delta: float) -> void:
 	pass # Real systems do work here. The harness only counts ticks.
 
 
+## Same look for both readouts.
+func _style_readout(label: Label) -> void:
+	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	label.add_theme_constant_override("shadow_outline_size", 4)
+
+
 func _process(delta: float) -> void:
+	# Recomputed rather than anchored so it follows a resized window.
+	_controls.position = Vector2(
+		16, get_viewport_rect().size.y - _controls.size.y - 10)
+
+	# Food does not move, but the amount on its label changes as it is eaten.
+	_food_layer.refresh()
+
 	# Live proof that world -> grid conversion works: the highlighted tile
 	# follows the mouse and the readout below names its coordinate.
 	var mouse_local := _renderer.to_local(_renderer.get_global_mouse_position())
@@ -117,47 +168,98 @@ func _process(delta: float) -> void:
 
 	var expected := SimulationManager.TICKS_PER_SECOND * SimulationManager.get_speed()
 	_label.text = "\n".join([
-		"Year %d   Day %d   %s" % [
-			GameTime.get_year(), GameTime.get_day(), GameTime.get_time_string()],
-		"total days %8d" % GameTime.get_total_days(),
-		"",
-		"floor      %8s   of %d" % [
-			"%d" % (_dungeon.get_current_floor_index() + 1), _dungeon.get_floor_count()],
-		"dungeon    %8s   (%d tiles)" % [
-			"%dx%d" % [_dungeon.get_width(), _dungeon.get_height()],
-			_dungeon.get_tile_count()],
-		"Rodents    %8d   (%d on this floor)" % [
-			_creatures.get_creature_count(),
-			_creatures.get_creatures_on(_dungeon.get_current_floor()).size()],
-		"Gold       %8d   Tile Cost %d   Floor Cost %d" % [
-			_expansion.gold, _expansion.tile_cost, _expansion.get_floor_cost()],
-		"hover tile %8s   %s" % [
-			str(hover), _describe_hover(hover)],
-		"floor      %8s   zoom %.2fx" % [
-			"%d/%d" % [_dungeon.get_floor_tile_count(), _dungeon.get_tile_count()],
+		"Y%d D%d  %s   total days %d" % [GameTime.get_year(), GameTime.get_day(),
+			GameTime.get_time_string(), GameTime.get_total_days()],
+		"floor %d/%d   %dx%d  %d tiles   built %d/%d   zoom %.2fx" % [
+			_dungeon.get_current_floor_index() + 1, _dungeon.get_floor_count(),
+			_dungeon.get_width(), _dungeon.get_height(), _dungeon.get_tile_count(),
+			_dungeon.get_floor_tile_count(), _dungeon.get_tile_count(),
 			_camera.zoom.x / _fit_zoom],
-		"selection  %8s   %s" % _describe_selection(),
-		"mode       %8s   [tab] to switch" % EditMode.keys()[_edit_mode],
-		"expandable %8d   positions on offer" % _renderer.expandable.size(),
 		"",
-		"sim time   %8.2f s" % SimulationManager.get_simulation_time(),
-		"ticks      %8d" % SimulationManager.tick_count,
-		"ticks/sec  %8d   (expected %d)" % [_ticks_last_second, expected],
+		"Rodents %d   %d here  %d asleep  %d starved" % [
+			_creatures.get_creature_count(), _here().size(), _asleep_here(), _starved],
+		"Water   %d   %d thirsty  %d seeking  %d drinking" % [
+			_sources_of(FoodSource.Kind.WATER), _counting_thirsty(),
+			_counting_intent(Creature.Intent.SEEK_WATER),
+			_counting_intent(Creature.Intent.DRINK)],
+		"Food    %d   %d left  %d seeking  %d eating" % [
+			_sources_of(FoodSource.Kind.FOOD), roundi(_food_remaining()),
+			_counting_intent(Creature.Intent.SEEK_FOOD),
+			_counting_intent(Creature.Intent.EAT)],
+		"Pee     %d tiles   %.0f total" % [_peed_tiles(), _pee_total()],
+		"Gold %d   tile %d   floor %d" % [
+			_expansion.gold, _expansion.tile_cost, _expansion.get_floor_cost()],
 		"",
-		"render fps %8d   (cap %s)" % [
+		"mode %s   expandable %d   selection %s %s" % ([
+			EditMode.keys()[_edit_mode], _renderer.expandable.size()]
+			+ _describe_selection()),
+		"hover %s  %s" % [str(hover), _describe_hover(hover)],
+		"",
+		"sim %.1fs  %d ticks  %d/s (expect %d)" % [
+			SimulationManager.get_simulation_time(), SimulationManager.tick_count,
+			_ticks_last_second, expected],
+		"fps %d (cap %s)   speed %sx   %s" % [
 			Engine.get_frames_per_second(),
 			"none" if Engine.max_fps == 0 else str(Engine.max_fps),
-		],
-		"speed      %8sx" % SimulationManager.get_speed(),
-		"paused     %8s" % SimulationManager.is_paused(),
-		"",
-		"[wheel] or [+]/[-] zoom at cursor   [R] reset view",
-		"[left drag] place/remove floor   [left click] buy a tile in EXPAND",
-		"[S] spawn a rodent here   [L] toggle creature labels",
-		"[space] pause/resume   [1..4] speed 1/2/5/10x",
-		"[F1] cap 10 fps  [F2] cap 30  [F3] uncapped",
-		"[right] single step while paused",
+			SimulationManager.get_speed(),
+			"PAUSED" if SimulationManager.is_paused() else "running"],
 	])
+
+
+func _here() -> Array[Creature]:
+	return _creatures.get_creatures_on(_dungeon.get_current_floor())
+
+
+## Tiles on this floor that have been urinated on, and how much in total.
+func _peed_tiles() -> int:
+	return _dungeon.get_current_floor().get_peed_positions().size()
+
+
+func _pee_total() -> float:
+	var total := 0.0
+	for position in _dungeon.get_current_floor().get_peed_positions():
+		total += _dungeon.get_tile(position).pee_amount
+	return total
+
+
+## Food left on the floor being viewed, for the readout.
+func _food_remaining() -> float:
+	var total := 0.0
+	for food in _food.get_sources_on(_dungeon.get_current_floor()):
+		total += food.amount
+	return total
+
+
+func _sources_of(kind: FoodSource.Kind) -> int:
+	var count := 0
+	for source in _food.get_sources_on(_dungeon.get_current_floor()):
+		if source.kind == kind:
+			count += 1
+	return count
+
+
+func _counting_thirsty() -> int:
+	var count := 0
+	for creature in _here():
+		if creature.is_thirsty():
+			count += 1
+	return count
+
+
+func _counting_intent(intent: Creature.Intent) -> int:
+	var count := 0
+	for creature in _here():
+		if creature.intent == intent:
+			count += 1
+	return count
+
+
+func _asleep_here() -> int:
+	var count := 0
+	for creature in _here():
+		if creature.asleep:
+			count += 1
+	return count
 
 
 func _describe_hover(grid_position: Vector2i) -> String:
@@ -204,6 +306,7 @@ func _zoom_at(screen_position: Vector2, factor: float) -> void:
 	_camera.zoom = Vector2.ONE * target
 	_renderer.view_zoom = target
 	_creature_layer.view_zoom = target
+	_food_layer.view_zoom = target
 
 
 ## Rebuilds the floor buttons. Cheap enough to redo whenever the floor list or
@@ -242,6 +345,8 @@ func _switch_floor(index: int) -> void:
 	_reset_view()
 	_renderer.queue_redraw()
 	_creature_layer.current_floor = _dungeon.get_current_floor()
+	_food_layer.current_floor = _dungeon.get_current_floor()
+	_pee_layer.current_floor = _dungeon.get_current_floor()
 	print("switched to floor %d (%dx%d, %d tiles)" % [
 		index + 1, _dungeon.get_width(), _dungeon.get_height(),
 		_dungeon.get_tile_count()])
@@ -256,6 +361,29 @@ func _on_build_floor_pressed() -> void:
 	print("built floor %d for %d gold, balance %d"
 		% [index + 1, _expansion.get_floor_cost(), _expansion.gold])
 	_switch_floor(index)
+
+
+## Debug: drop one water source on a free floor tile of the floor being viewed.
+func _drop_water_here() -> void:
+	var placed := _food.place_random(_dungeon.get_current_floor(), 1,
+		FoodSource.DEFAULT_AMOUNT, FoodSource.DEFAULT_NUTRITION, _creatures,
+		FoodSource.Kind.WATER)
+	if placed.is_empty():
+		print("Nowhere to put water: needs a floored tile with nothing on it")
+	else:
+		print("dropped water #%d at %s (amount %.0f)" % [
+			placed[0].id, placed[0].grid_position, placed[0].amount])
+
+
+## Debug: drop one food source on a free floor tile of the floor being viewed.
+func _drop_food_here() -> void:
+	var placed := _food.place_random(_dungeon.get_current_floor(), 1,
+		FoodSource.DEFAULT_AMOUNT, FoodSource.DEFAULT_NUTRITION, _creatures)
+	if placed.is_empty():
+		print("Nowhere to put food: needs a floored tile with no creature or food on it")
+	else:
+		print("dropped food #%d at %s (amount %.0f, nutrition %.0f)" % [
+			placed[0].id, placed[0].grid_position, placed[0].amount, placed[0].nutrition])
 
 
 ## Debug spawn: one rodent on the floor being viewed, if it has a free tile.
@@ -293,6 +421,7 @@ func _reset_view() -> void:
 	_camera.position = world.get_center() 		- (_view_anchor() - get_viewport_rect().size / 2.0) / _fit_zoom
 	_renderer.view_zoom = _fit_zoom
 	_creature_layer.view_zoom = _fit_zoom
+	_food_layer.view_zoom = _fit_zoom
 
 
 func set_edit_mode(mode: EditMode) -> void:
@@ -436,5 +565,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			toggle_edit_mode()
 		KEY_S:
 			_spawn_rodent_here()
+		KEY_F:
+			_drop_food_here()
+		KEY_W:
+			_drop_water_here()
+		KEY_V:
+			_creature_layer.show_detection_area = not _creature_layer.show_detection_area
 		KEY_L:
 			_creature_layer.labels_visible = not _creature_layer.labels_visible
+			_food_layer.labels_visible = _creature_layer.labels_visible
