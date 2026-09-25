@@ -54,6 +54,9 @@ System 3 - Food
 | `test_system_1_2_floor_expansion.gd` | multiple floors, independence, floor cost |
 | `test_system_2_creatures.gd` | creature life: movement, trips, sleep, hunger, death |
 | `test_system_3_food.gd` | food: placement, perception, seeking, eating, depletion |
+| `test_system_4_pee.gd` | urination: when it is due, where it lands, one sprite per tile |
+| `test_system_5_water.gd` | hydration, thirst, drinking, and drink-before-pee |
+| `test_system_6_camera.gd` | camera framing, bounds, zoom, following, and the two view modes |
 
 ## Writing a suite
 
@@ -103,8 +106,8 @@ parse error is real.
 
 ## Do the tests actually catch bugs?
 
-They are checked against deliberately broken code rather than assumed to work. Nine
-mutations have been run so far:
+They are checked against deliberately broken code rather than assumed to work. Thirty-four
+mutations have been run so far. The first nine, against Systems 1 to 3:
 
 | Broken on purpose | Caught |
 |---|---|
@@ -127,6 +130,70 @@ the mutation now fails six checks.
 Two other runs exposed weak checks that could pass by luck: one compared only a
 creature's final position after a random walk, which can wander away and come back.
 They now watch every tick.
+
+And seventeen against System 6, the camera and the two view modes:
+
+| Broken on purpose | Caught |
+|---|---|
+| The camera ignores the view angle when it positions itself | 2 |
+| Screen -> world forgets to undo the angle | 6 |
+| The bounds clamp hardcodes an 8x5 dungeon | 4 |
+| No bounds clamping at all | 3 |
+| Changing view is a cut rather than a move | 2 |
+| Edge scrolling snaps to full speed instead of ramping | 1 |
+| Zoom has no limits | 2 |
+| Returning to a view forgets where the player was | 2 |
+| Creatures squash with the floor instead of standing up | 1 |
+| Water is stood up like an object instead of lying flat | 1 |
+| Water is merged into the depth sort | 1 |
+| The gameplay view can build after all | 3 |
+| Clicking bare ground keeps following the last rodent | 2 |
+| The camera is welded to what it follows | 1 |
+| Following never lets go when the player takes over | 3 |
+| Following does not zoom in to look | 6 |
+| A view change keeps chasing what it was following | 1 |
+
+Three of those seventeen were missed on the first run and are worth recording:
+
+- **The camera ignores the angle when it positions itself** went unnoticed because every
+  conversion was computed from the rig's own state and never read back off the camera.
+  The arithmetic was self-consistent and could still have described a camera pointing
+  somewhere else. The suite now compares the rig's answers against the viewport's real
+  canvas transform.
+- **Returning to a view forgets where the player was** passed because the test never
+  moved the view before switching away, so "where the player was" was the middle of the
+  world either way. It now pans first — and needs a world big enough that the bounds do
+  not simply hold the view still, which is its own trap.
+- **The camera is welded to what it follows** passed because the check measured the gap
+  between the subject and the middle of the screen one frame after a jump — and the jump
+  landed near the edge of the world, where the *bounds clamp* leaves a gap of exactly
+  that kind. A welded camera looked like a trailing one. The jump now has to land
+  somewhere the clamp provably does not reach, and that precondition is itself checked.
+
+A fourth trap was in the test rather than the code: a lambda capturing a local `Vector2`
+captures it **by value**, so moving the subject afterwards moved nothing and "it keeps
+up" was testing a stationary point. The subject is held in an array now. The production
+code captures a `Creature`, which is a reference, so it reads the live position.
+
+And eight against the rodent's idle animation:
+
+| Broken on purpose | Caught |
+|---|---|
+| North borrows the profile instead of the back strip | 1 |
+| Left and right strips are swapped | 1 |
+| The strip is not split into frames | 3 |
+| The idle loop never advances | 1 |
+| The loop runs off the wall clock instead of simulation time | 2 |
+| Every creature breathes in lockstep | 1 |
+| The frame runs off the end of the strip | 2 |
+| A half-filled sheet set counts as animated | 3 |
+
+"The frame runs off the end of the strip" was missed at first for the same reason the
+dead-creature mutation in System 4 was: **something downstream was already guarding it.**
+`Sprite2D` clamps any frame number it is given, so reading the frame back reported
+Godot's guard rather than whether this code kept the number in range. The check now asks
+`_idle_frame()` directly, the way the movement rules are asked of the model rather than
+of the view.
 
 If you change behaviour on purpose, expect failures here, and read them before
 updating them: in this project they have repeatedly been the first sign of a real

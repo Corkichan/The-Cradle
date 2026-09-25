@@ -67,14 +67,41 @@ extends Resource
 @export var urination_amount: float = 1.0
 
 @export_group("Visuals")
-## Profile sprite. [member side_faces_left] says which way it looks unflipped.
+## Profile sprite, used only by species with no idle strips.
+## [member side_faces_left] says which way it looks unflipped.
 @export var side_texture: Texture2D
 ## Sprite used when moving south, towards the camera.
 @export var front_texture: Texture2D
 @export var side_faces_left: bool = true
-## Drawn height, in tiles. One scale is used for every sprite so the creature
-## does not change size when it turns.
+## Drawn height in tiles, measured from the front view, whose height is the one
+## scale every direction uses — so a creature does not change size as it turns.
+## Art drawn shorter from the side is still drawn shorter, which is the artist
+## saying so rather than the code getting it wrong.
 @export var display_height_tiles: float = 0.9
+
+@export_subgroup("Idle animation")
+## One horizontal strip per direction: a single row of [member idle_frames]
+## equal-width frames. When all four are set they replace [member side_texture]
+## and [member front_texture], and the creature gains a REAL back view instead
+## of borrowing its profile.
+@export var idle_front_sheet: Texture2D
+@export var idle_back_sheet: Texture2D
+@export var idle_left_sheet: Texture2D
+@export var idle_right_sheet: Texture2D
+## Frames in each strip. 1 means there is nothing to play.
+@export var idle_frames: int = 1
+## Frames per SIMULATION second, so the animation inherits pause and speed the
+## way every other rate in the game does rather than running off a wall clock.
+@export var idle_fps: float = 8.0
+
+
+## True when this species is drawn from strips rather than single pictures.
+##
+## All four directions are required. A half-filled set would animate for some
+## facings and fall back for others, which reads as a bug rather than as art
+## that is not finished yet.
+func has_idle_sheets() -> bool:
+	return idle_frames > 1 		and idle_front_sheet != null and idle_back_sheet != null 		and idle_left_sheet != null and idle_right_sheet != null
 
 
 ## True if [param hour] falls inside this species' sleeping hours. Equal start

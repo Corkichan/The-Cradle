@@ -25,10 +25,30 @@ var current_floor: DungeonFloor = null:
 
 var view_zoom: float = 1.0:
 	set(value):
+		if is_equal_approx(value, view_zoom):
+			return
 		view_zoom = value
 		for view in _views.values():
 			view.view_zoom = value
-			view.sync()
+
+## Vertical squash the world is drawn with. Each view decides what to do with
+## it: water tips away with the floor, food stands back up.
+var view_tilt: float = 1.0:
+	set(value):
+		if is_equal_approx(value, view_tilt):
+			return
+		view_tilt = value
+		for view in _views.values():
+			view.view_tilt = value
+
+## How far food stands on its tile rather than sits centred on it.
+var ground_anchor: float = 0.0:
+	set(value):
+		if is_equal_approx(value, ground_anchor):
+			return
+		ground_anchor = value
+		for view in _views.values():
+			view.ground_anchor = value
 
 var labels_visible: bool = true:
 	set(value):
@@ -55,6 +75,8 @@ func _add_view(food: FoodSource) -> void:
 	var view: FoodView = _VIEW_SCENE.instantiate()
 	add_child(view)
 	view.view_zoom = view_zoom
+	view.view_tilt = view_tilt
+	view.ground_anchor = ground_anchor
 	view.bind(food)
 	view.set_label_visible(labels_visible)
 	_views[food] = view

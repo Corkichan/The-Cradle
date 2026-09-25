@@ -5,18 +5,9 @@ extends Node2D
 ## (Creature life).
 ## Delete this script and its node assignment once real gameplay exists.
 
-## Fraction of the usable viewport the dungeon should occupy, leaving room for
-## the axis labels drawn outside the grid.
-const _CAMERA_FIT_MARGIN: float = 0.88
 ## Screen width reserved for the debug HUD. The dungeon is framed in what is
 ## left, so the HUD never covers the axis labels.
 const _HUD_WIDTH: float = 440.0
-
-## Zoom limits, as multiples of the fit-the-whole-dungeon zoom.
-const _ZOOM_MIN_FACTOR: float = 0.5
-const _ZOOM_MAX_FACTOR: float = 12.0
-## Multiplier applied per wheel notch / key press.
-const _ZOOM_STEP: float = 1.15
 
 ## Prototype creature. None exist at startup; the player spawns them with S.
 const _RODENT: CreatureSpecies = preload("res://assets/creatures/rodent/maniac_sewer_rat.tres")
@@ -37,11 +28,15 @@ const _MODE_COLOR := {
 	EditMode.EXPAND: Color("6fe08a"),
 }
 
-@onready var _renderer: DungeonRenderer = $DungeonRenderer
-@onready var _creature_layer: CreatureLayer = $CreatureLayer
-@onready var _food_layer: FoodLayer = $FoodLayer
-@onready var _pee_layer: PeeLayer = $PeeLayer
-@onready var _camera: Camera2D = $Camera2D
+## Everything that lives in world space. Its vertical scale IS the camera
+## angle — see [CameraRig] — so the whole world tips as one piece and no layer
+## needs its own idea of what the view looks like.
+@onready var _world: Node2D = $World
+@onready var _renderer: DungeonRenderer = $World/DungeonRenderer
+@onready var _creature_layer: CreatureLayer = $World/CreatureLayer
+@onready var _food_layer: FoodLayer = $World/FoodLayer
+@onready var _pee_layer: PeeLayer = $World/PeeLayer
+@onready var _camera: CameraRig = $Camera2D
 @onready var _hud: CanvasLayer = $HUD
 
 var _dungeon: Dungeon
@@ -49,9 +44,11 @@ var _expansion: DungeonExpansion
 var _creatures: CreatureSystem
 var _food: FoodSystem
 var _starved: int = 0
+## The creature the player clicked in the gameplay view, or null. Inspecting is
+## looking, never touching: nothing here changes the simulation.
+var _inspected: Creature = null
 var _controls: Label
 var _floor_bar: HBoxContainer
-var _fit_zoom: float = 1.0
 var _dragging: bool = false
 var _drag_start: Vector2i = Vector2i.ZERO
 ## Current edit mode. Explicit rather than inferred from the tile under the
@@ -90,12 +87,18 @@ func _ready() -> void:
 	if initial_food.is_empty():
 		print("No floor yet, so no food placed - build some floor, then press F")
 	_creatures.creature_died.connect(func(c: Creature) -> void:
+		if c == _inspected:
+			_stop_inspecting()
 		_starved += 1
 		print("Rodent #%d starved to death at %s, aged %ds" % [
 			c.id, c.grid_position, int(c.age)]))
 
+	# The camera is told the shape of the world and the strip the HUD occupies.
+	# It is never told what a tile is, so nothing about 8x5 reaches it.
+	_camera.view_margins = Vector4(_HUD_WIDTH, 0.0, 0.0, 0.0)
+	_refresh_camera_bounds()
 	_camera.make_current()
-	_reset_view()
+	_camera.reset_view(true)
 	set_edit_mode(_edit_mode)
 
 	# HUD lives on a CanvasLayer so the camera does not drag it around.
@@ -120,9 +123,11 @@ func _ready() -> void:
 	_style_readout(_controls)
 	_controls.text = "\n".join([
 		"[S] rodent   [F] food   [W] water   [L] labels   [V] search area",
-		"[tab] mode   [left drag] place/remove floor   [left click] buy in EXPAND",
+		"BUILD view: [tab] mode  [left drag] place/remove floor  [click] buy in EXPAND",
+		"GAMEPLAY view: [left click] a rodent to inspect and follow it",
 		"[space] pause   [1..4] speed 1/2/5/10x   [right] step while paused",
-		"[wheel] or [+]/[-] zoom at cursor   [R] reset view   [F1/F2/F3] fps cap",
+		"[wheel] or [+]/[-] zoom at cursor   [middle drag] pan   [R] reset view",
+		"[B] gameplay / build view   [E] edge scrolling   [F1/F2/F3] fps cap",
 	])
 	_hud.add_child(_controls)
 
@@ -145,6 +150,13 @@ func _style_readout(label: Label) -> void:
 
 
 func _process(delta: float) -> void:
+	_apply_presentation()
+
+	# The camera drops what it is following the moment the player steers, so the
+	# selection follows the camera rather than the camera obeying a stale one.
+	if _inspected != null and not _camera.is_following():
+		_inspected = null
+
 	# Recomputed rather than anchored so it follows a resized window.
 	_controls.position = Vector2(
 		16, get_viewport_rect().size.y - _controls.size.y - 10)
@@ -154,8 +166,9 @@ func _process(delta: float) -> void:
 
 	# Live proof that world -> grid conversion works: the highlighted tile
 	# follows the mouse and the readout below names its coordinate.
-	var mouse_local := _renderer.to_local(_renderer.get_global_mouse_position())
-	var hover := _dungeon.world_to_grid(mouse_local)
+	# Converted through the camera, which knows the angle, so the tile under the
+	# cursor is the same tile in both views.
+	var hover := _grid_at(get_viewport().get_mouse_position())
 	_renderer.hover_tile = hover
 
 	# Measure ticks per REAL second. This is the number that proves
@@ -174,7 +187,7 @@ func _process(delta: float) -> void:
 			_dungeon.get_current_floor_index() + 1, _dungeon.get_floor_count(),
 			_dungeon.get_width(), _dungeon.get_height(), _dungeon.get_tile_count(),
 			_dungeon.get_floor_tile_count(), _dungeon.get_tile_count(),
-			_camera.zoom.x / _fit_zoom],
+			_camera.get_zoom_ratio()],
 		"",
 		"Rodents %d   %d here  %d asleep  %d starved" % [
 			_creatures.get_creature_count(), _here().size(), _asleep_here(), _starved],
@@ -194,6 +207,10 @@ func _process(delta: float) -> void:
 			EditMode.keys()[_edit_mode], _renderer.expandable.size()]
 			+ _describe_selection()),
 		"hover %s  %s" % [str(hover), _describe_hover(hover)],
+		"inspecting %s" % _describe_inspection(),
+		"view %s   tilt %.2f   edge scroll %s" % [
+			CameraRig.View.keys()[_camera.get_view()], _camera.get_tilt(),
+			"on" if _camera.edge_scroll_enabled else "off"],
 		"",
 		"sim %.1fs  %d ticks  %d/s (expect %d)" % [
 			SimulationManager.get_simulation_time(), SimulationManager.tick_count,
@@ -276,6 +293,49 @@ func _describe_hover(grid_position: Vector2i) -> String:
 	return "outside dungeon"
 
 
+## The creature standing on, or stepping onto, a tile. Null for an empty one.
+func _creature_at(grid_position: Vector2i) -> Creature:
+	for creature in _here():
+		if creature.grid_position == grid_position 				or creature.move_target == grid_position:
+			return creature
+	return null
+
+
+## Looks at whatever was clicked. Clicking a creature hands the camera a way to
+## ask where that creature is, so the view follows it; clicking anywhere else
+## lets go. Nothing here writes to the simulation — this is the gameplay view's
+## whole interaction, and it is read-only by design.
+func _inspect_at(screen_position: Vector2) -> void:
+	var creature := _creature_at(_grid_at(screen_position))
+	if creature == null:
+		_stop_inspecting()
+		return
+	_inspected = creature
+	# A function rather than the creature itself, so the camera follows a point
+	# and never learns what a creature is.
+	_camera.follow(func() -> Vector2:
+		var half := Vector2.ONE * (Dungeon.TILE_SIZE / 2.0)
+		var from := Vector2(creature.grid_position) * Dungeon.TILE_SIZE + half
+		var to := Vector2(creature.move_target) * Dungeon.TILE_SIZE + half
+		return from.lerp(to, creature.move_progress))
+	print("inspecting %s #%d at %s" % [
+		creature.get_variant_name(), creature.id, creature.grid_position])
+
+
+func _stop_inspecting() -> void:
+	_inspected = null
+	_camera.stop_following()
+
+
+func _describe_inspection() -> String:
+	if _inspected == null:
+		return "- (click a rodent in the gameplay view)"
+	return "%s #%d  %s  age %ds  hunger %d  water %d  at %s" % [
+		_inspected.get_variant_name(), _inspected.id,
+		Creature.State.keys()[_inspected.state], int(_inspected.age),
+		int(_inspected.hunger), int(_inspected.hydration), _inspected.grid_position]
+
+
 ## [size, what release will do] for the HUD.
 func _describe_selection() -> Array:
 	if not _dragging:
@@ -287,26 +347,41 @@ func _describe_selection() -> Array:
 	]
 
 
-## Screen pixel -> world pixel for a given zoom, computed directly rather than
-## via the camera transform, which only refreshes at end of frame.
-func _screen_to_world(screen_position: Vector2, zoom: float) -> Vector2:
-	return _camera.position + (screen_position - get_viewport_rect().size / 2.0) / zoom
+## Hands the camera's framing to the things that draw.
+##
+## The camera decides HOW the world is presented; this decides WHAT that means
+## for each layer, because only the scene knows which of its layers are ground
+## and which are standing on it. The dungeon, the pee and the water tip away
+## with the floor; the rodents and the food are stood back up.
+##
+## None of this touches a grid coordinate. A tile is at the same place in both
+## views — it is only drawn from a different angle.
+func _apply_presentation() -> void:
+	var tilt := _camera.get_tilt()
+	var anchor := _camera.get_ground_anchor()
+	var zoom_level := _camera.get_zoom_level()
+
+	_world.scale.y = tilt
+
+	_renderer.view_zoom = zoom_level
+	_renderer.view_tilt = tilt
+	# Measuring aids belong to the view you build in.
+	_renderer.show_grid = _camera.get_view() == CameraRig.View.BUILD
+
+	_creature_layer.view_zoom = zoom_level
+	_creature_layer.view_tilt = tilt
+	_creature_layer.ground_anchor = anchor
+
+	_food_layer.view_zoom = zoom_level
+	_food_layer.view_tilt = tilt
+	_food_layer.ground_anchor = anchor
 
 
-## Zooms by [param factor], keeping whatever is under [param screen_position]
-## pinned there. Zooming toward the cursor doubles as navigation, so no
-## separate pan control is needed.
-func _zoom_at(screen_position: Vector2, factor: float) -> void:
-	var target := clampf(_camera.zoom.x * factor,
-		_fit_zoom * _ZOOM_MIN_FACTOR, _fit_zoom * _ZOOM_MAX_FACTOR)
-	if is_equal_approx(target, _camera.zoom.x):
-		return
-	var anchor_world := _screen_to_world(screen_position, _camera.zoom.x)
-	_camera.position = anchor_world 		- (screen_position - get_viewport_rect().size / 2.0) / target
-	_camera.zoom = Vector2.ONE * target
-	_renderer.view_zoom = target
-	_creature_layer.view_zoom = target
-	_food_layer.view_zoom = target
+## Tells the camera the shape of the world whenever that shape changes. The
+## camera stores it as a plain rectangle, so buying a tile or switching to a
+## floor of another size reframes without the camera knowing either happened.
+func _refresh_camera_bounds() -> void:
+	_camera.world_bounds = _dungeon.get_world_bounds()
 
 
 ## Rebuilds the floor buttons. Cheap enough to redo whenever the floor list or
@@ -342,7 +417,8 @@ func _switch_floor(index: int) -> void:
 		return
 	_refresh_expandable()
 	_rebuild_floor_bar()
-	_reset_view()
+	_refresh_camera_bounds()
+	_camera.reset_view()
 	_renderer.queue_redraw()
 	_creature_layer.current_floor = _dungeon.get_current_floor()
 	_food_layer.current_floor = _dungeon.get_current_floor()
@@ -396,34 +472,6 @@ func _spawn_rodent_here() -> void:
 			spawned[0].grid_position, _dungeon.get_current_floor_index() + 1])
 
 
-## Viewport minus the strip reserved for the HUD.
-func _usable_size() -> Vector2:
-	var viewport_size := get_viewport_rect().size
-	return Vector2(viewport_size.x - _HUD_WIDTH, viewport_size.y)
-
-
-## Screen pixel the dungeon centre should sit on: the middle of the area the
-## HUD is not using, rather than the middle of the window.
-func _view_anchor() -> Vector2:
-	var viewport_size := get_viewport_rect().size
-	return Vector2(_HUD_WIDTH + _usable_size().x / 2.0, viewport_size.y / 2.0)
-
-
-## Frames the whole dungeon again. The fit is recomputed from the CURRENT bounds
-## rather than cached from startup, so this reframes after the dungeon has grown.
-func _reset_view() -> void:
-	var world := _dungeon.get_world_bounds()
-	var usable := _usable_size()
-	_fit_zoom = minf(
-		usable.x / world.size.x,
-		usable.y / world.size.y) * _CAMERA_FIT_MARGIN
-	_camera.zoom = Vector2.ONE * _fit_zoom
-	_camera.position = world.get_center() 		- (_view_anchor() - get_viewport_rect().size / 2.0) / _fit_zoom
-	_renderer.view_zoom = _fit_zoom
-	_creature_layer.view_zoom = _fit_zoom
-	_food_layer.view_zoom = _fit_zoom
-
-
 func set_edit_mode(mode: EditMode) -> void:
 	_edit_mode = mode
 	_renderer.selection_color = _MODE_COLOR[mode]
@@ -436,7 +484,7 @@ func toggle_edit_mode() -> void:
 
 ## Ghost tiles are only shown in EXPAND mode, so the other modes stay uncluttered.
 func _refresh_expandable() -> void:
-	_renderer.expandable = _expansion.get_expandable_positions() 		if _edit_mode == EditMode.EXPAND else ([] as Array[Vector2i])
+	_renderer.expandable = _expansion.get_expandable_positions() 		if _edit_mode == EditMode.EXPAND and _camera != null 		and _camera.get_view() == CameraRig.View.BUILD 		else ([] as Array[Vector2i])
 
 
 ## Buys the tile under the click. One tile per click — expansion is deliberately
@@ -444,6 +492,7 @@ func _refresh_expandable() -> void:
 func _try_purchase(grid_position: Vector2i) -> void:
 	if not _expansion.purchase_tile(grid_position):
 		return
+	_refresh_camera_bounds()
 	_refresh_expandable()
 	_rebuild_floor_bar()
 	_renderer.queue_redraw()
@@ -454,8 +503,7 @@ func _try_purchase(grid_position: Vector2i) -> void:
 ## Grid coordinate under a screen pixel. Derived from the event position rather
 ## than the polled mouse, so the tile acted on is always the tile clicked.
 func _grid_at(screen_position: Vector2) -> Vector2i:
-	var world := _screen_to_world(screen_position, _camera.zoom.x)
-	return _dungeon.world_to_grid(_renderer.to_local(world))
+	return _dungeon.world_to_grid(_camera.screen_to_world(screen_position))
 
 
 ## Clamps a grid coordinate into the dungeon, so a drag that runs off the edge
@@ -516,21 +564,22 @@ func _end_drag(screen_position: Vector2) -> void:
 	_renderer.queue_redraw()
 
 
+## The left button means different things in the two views, and only one of
+## them touches the dungeon. Building, removing and buying are BUILD VIEW ONLY:
+## in the gameplay view you are watching a world, not editing one.
 func _unhandled_input(event: InputEvent) -> void:
+	var building := _camera.get_view() == CameraRig.View.BUILD
 	if event is InputEventMouseMotion:
-		_update_drag(event.position)
-	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
+		if building:
+			_update_drag(event.position)
+	elif event is InputEventMouseButton 			and event.button_index == MOUSE_BUTTON_LEFT:
+		if not building:
 			if event.pressed:
-				_begin_drag(event.position)
-			else:
-				_end_drag(event.position)
+				_inspect_at(event.position)
 		elif event.pressed:
-			match event.button_index:
-				MOUSE_BUTTON_WHEEL_UP:
-					_zoom_at(event.position, _ZOOM_STEP)
-				MOUSE_BUTTON_WHEEL_DOWN:
-					_zoom_at(event.position, 1.0 / _ZOOM_STEP)
+			_begin_drag(event.position)
+		else:
+			_end_drag(event.position)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -556,11 +605,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_RIGHT:
 			SimulationManager.step()
 		KEY_EQUAL, KEY_KP_ADD:
-			_zoom_at(get_viewport_rect().size / 2.0, _ZOOM_STEP)
+			_camera.zoom_at(get_viewport_rect().size / 2.0, _camera.zoom_step)
 		KEY_MINUS, KEY_KP_SUBTRACT:
-			_zoom_at(get_viewport_rect().size / 2.0, 1.0 / _ZOOM_STEP)
+			_camera.zoom_at(get_viewport_rect().size / 2.0, 1.0 / _camera.zoom_step)
 		KEY_R:
-			_reset_view()
+			_camera.reset_view()
+		KEY_B:
+			# Not tab: tab already cycles the edit mode.
+			_stop_inspecting()
+			_dragging = false
+			_renderer.selection = Rect2i()
+			_camera.toggle_view()
+			_refresh_expandable()
+		KEY_E:
+			_camera.edge_scroll_enabled = not _camera.edge_scroll_enabled
 		KEY_TAB:
 			toggle_edit_mode()
 		KEY_S:

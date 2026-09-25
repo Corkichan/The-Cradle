@@ -47,6 +47,26 @@ var view_zoom: float = 1.0:
 		view_zoom = clamped
 		queue_redraw()
 
+## Vertical squash the world is drawn with. The tiles themselves should squash —
+## they are the ground — but the axis labels are text about the grid rather than
+## part of it, so they are drawn back out of the squash. See [CameraRig].
+var view_tilt: float = 1.0:
+	set(value):
+		var clamped := maxf(value, 0.001)
+		if is_equal_approx(clamped, view_tilt):
+			return
+		view_tilt = clamped
+		queue_redraw()
+
+## Draws the measuring aids — per-tile lines and axis coordinates — which belong
+## to a view you are building in, not one you are watching creatures live in.
+var show_grid: bool = true:
+	set(value):
+		if value == show_grid:
+			return
+		show_grid = value
+		queue_redraw()
+
 ## Positions offered for purchase, drawn as ghost tiles. Supplied by the caller;
 ## the renderer does not know what expansion is or what it costs.
 var expandable: Array[Vector2i] = []:
@@ -108,7 +128,8 @@ func _draw() -> void:
 				color = _COLOR_EMPTY_A if even else _COLOR_EMPTY_B
 			var rect := Rect2(dungeon.grid_to_world(pos), cell)
 			draw_rect(rect, color)
-			draw_rect(rect, _COLOR_GRID_LINE if x % _step_for(bounds.size.x) != 0 				and y % _step_for(bounds.size.y) != 0 else _COLOR_MAJOR_LINE, false, thin)
+			if show_grid:
+				draw_rect(rect, _COLOR_GRID_LINE if x % _step_for(bounds.size.x) != 0 					and y % _step_for(bounds.size.y) != 0 else _COLOR_MAJOR_LINE, false, thin)
 
 	# Ghosts for anything on offer.
 	for pos in expandable:
@@ -140,7 +161,8 @@ func _draw() -> void:
 		draw_rect(sel, Color(selection_color, 0.22))
 		draw_rect(sel, selection_color, false, 3.0 / view_zoom)
 
-	_draw_axis_labels(bounds, tile_size)
+	if show_grid:
+		_draw_axis_labels(bounds, tile_size)
 
 
 ## Marks every tile on a small axis, every [constant _MAJOR_EVERY] on a big one.
@@ -158,26 +180,36 @@ func _step_for(dimension: int) -> int:
 func _draw_axis_labels(bounds: Rect2i, tile_size: int) -> void:
 	var font := ThemeDB.fallback_font
 	var top_left := Vector2(bounds.position) * tile_size
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE / view_zoom)
+	# Undoes the camera zoom AND the world's vertical squash, so the text is
+	# neither magnified nor flattened while the view is tipping.
+	draw_set_transform(Vector2.ZERO, 0.0,
+		Vector2(1.0 / view_zoom, 1.0 / (view_zoom * view_tilt)))
 
-	# Positions are multiplied by view_zoom to cancel the transform, so the
-	# offsets added afterwards are plain screen pixels.
 	for x in range(bounds.position.x, bounds.end.x, _step_for(bounds.size.x)):
 		draw_string(font,
-			Vector2(x * tile_size, top_left.y) * view_zoom + Vector2(3, -6),
+			_label_point(Vector2(x * tile_size, top_left.y)) + Vector2(3, -6),
 			str(x), HORIZONTAL_ALIGNMENT_LEFT, -1, _LABEL_SIZE, _COLOR_LABEL)
 	for y in range(bounds.position.y, bounds.end.y, _step_for(bounds.size.y)):
 		draw_string(font,
-			Vector2(top_left.x, y * tile_size) * view_zoom + Vector2(-26, _LABEL_SIZE),
+			_label_point(Vector2(top_left.x, y * tile_size)) + Vector2(-26, _LABEL_SIZE),
 			str(y), HORIZONTAL_ALIGNMENT_LEFT, -1, _LABEL_SIZE, _COLOR_LABEL)
 
-	draw_string(font, top_left * view_zoom + Vector2(3, -22),
+	draw_string(font, _label_point(top_left) + Vector2(3, -22),
 		"(%d,%d)" % [bounds.position.x, bounds.position.y],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, _LABEL_SIZE, _COLOR_BORDER)
 	var last := bounds.end - Vector2i.ONE
 	draw_string(font,
-		Vector2(last.x * tile_size, bounds.end.y * tile_size) * view_zoom + Vector2(-30, 18),
+		_label_point(Vector2(last.x * tile_size, bounds.end.y * tile_size))
+			+ Vector2(-30, 18),
 		"(%d,%d)" % [last.x, last.y],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, _LABEL_SIZE, _COLOR_BORDER)
 
 	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+
+## A world point in the coordinate space of the label transform above, which
+## cancels it — so the pixel offsets added afterwards are plain screen pixels.
+func _label_point(world_position: Vector2) -> Vector2:
+	return Vector2(
+		world_position.x * view_zoom,
+		world_position.y * view_zoom * view_tilt)

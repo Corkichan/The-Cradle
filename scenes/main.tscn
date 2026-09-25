@@ -1,26 +1,35 @@
-[gd_scene load_steps=6 format=3 uid="uid://dx3qbfacg8xg2"]
+[gd_scene load_steps=7 format=3 uid="uid://dx3qbfacg8xg2"]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/dungeon/dungeon_renderer.gd" id="2_dungeon_renderer"]
 [ext_resource type="Script" path="res://scripts/environment/pee_layer.gd" id="3_pee_layer"]
 [ext_resource type="Script" path="res://scripts/food/food_layer.gd" id="4_food_layer"]
 [ext_resource type="Script" path="res://scripts/creatures/creature_layer.gd" id="5_creature_layer"]
+[ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="6_camera_rig"]
 
 [node name="Node2D" type="Node2D" unique_id=1468060154]
 script = ExtResource("1_main")
 
-[node name="DungeonRenderer" type="Node2D" parent="."]
+[node name="World" type="Node2D" parent="."]
+y_sort_enabled = true
+
+[node name="DungeonRenderer" type="Node2D" parent="World"]
+z_index = -2
 script = ExtResource("2_dungeon_renderer")
 
-[node name="PeeLayer" type="Node2D" parent="."]
+[node name="PeeLayer" type="Node2D" parent="World"]
+z_index = -1
 script = ExtResource("3_pee_layer")
 
-[node name="FoodLayer" type="Node2D" parent="."]
+[node name="FoodLayer" type="Node2D" parent="World"]
+y_sort_enabled = true
 script = ExtResource("4_food_layer")
 
-[node name="CreatureLayer" type="Node2D" parent="."]
+[node name="CreatureLayer" type="Node2D" parent="World"]
+y_sort_enabled = true
 script = ExtResource("5_creature_layer")
 
 [node name="Camera2D" type="Camera2D" parent="."]
+script = ExtResource("6_camera_rig")
 
 [node name="HUD" type="CanvasLayer" parent="."]

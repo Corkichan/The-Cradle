@@ -32,10 +32,32 @@ var current_floor: DungeonFloor = null:
 
 var view_zoom: float = 1.0:
 	set(value):
+		if is_equal_approx(value, view_zoom):
+			return
 		view_zoom = value
 		queue_redraw()
 		for view in _views.values():
 			view.view_zoom = value
+
+## Vertical squash the world is drawn with, handed to each view so it can stand
+## its creature back up. Pushed in rather than read from the camera, so the
+## layer works in any scene however that scene is presented.
+var view_tilt: float = 1.0:
+	set(value):
+		if is_equal_approx(value, view_tilt):
+			return
+		view_tilt = value
+		for view in _views.values():
+			view.view_tilt = value
+
+## How far creatures stand on their tile rather than sit centred on it.
+var ground_anchor: float = 0.0:
+	set(value):
+		if is_equal_approx(value, ground_anchor):
+			return
+		ground_anchor = value
+		for view in _views.values():
+			view.ground_anchor = value
 
 ## Draws the area each hungry creature can notice food in. Off by default.
 var show_detection_area: bool = false:
@@ -92,6 +114,8 @@ func _add_view(creature: Creature) -> void:
 	var view: CreatureView = _VIEW_SCENE.instantiate()
 	add_child(view)
 	view.view_zoom = view_zoom
+	view.view_tilt = view_tilt
+	view.ground_anchor = ground_anchor
 	view.bind(creature)
 	view.set_label_visible(labels_visible)
 	_views[creature] = view

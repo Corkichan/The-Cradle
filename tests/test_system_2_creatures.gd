@@ -664,26 +664,83 @@ func _test_view() -> void:
 	check("snaps to tile centre", view.position, Vector2(3 * 32 + 16, 2 * 32 + 16))
 	var scale_side := sprite.scale
 
+	check_true("the rodent is drawn from idle strips", RODENT.has_idle_sheets())
+
 	rat.facing = Vector2i.LEFT
 	view.sync(0.0, true)
-	check("west: side sprite", sprite.texture, RODENT.side_texture)
-	check_false("west: art already faces left, not flipped", sprite.flip_h)
+	check("west: the left strip", sprite.texture, RODENT.idle_left_sheet)
+	check_false("west: strips are never flipped", sprite.flip_h)
+	check("split into its frames", sprite.hframes, RODENT.idle_frames)
 
 	rat.facing = Vector2i.RIGHT
 	view.sync(0.0, true)
-	check("east: side sprite", sprite.texture, RODENT.side_texture)
-	check_true("east: flipped", sprite.flip_h)
+	check("east: the right strip", sprite.texture, RODENT.idle_right_sheet)
+	check_false("east: still not flipped - there is art for this way",
+		sprite.flip_h)
 
 	rat.facing = Vector2i.DOWN
 	view.sync(0.0, true)
-	check("south: front sprite", sprite.texture, RODENT.front_texture)
-	check_false("south: not flipped", sprite.flip_h)
+	check("south: the front strip", sprite.texture, RODENT.idle_front_sheet)
 	check("same scale when turning", sprite.scale, scale_side)
 
 	rat.facing = Vector2i.UP
 	view.sync(0.0, true)
-	check("north: side sprite (no back sprite yet)", sprite.texture, RODENT.side_texture)
-	check_true("north: keeps last horizontal facing (east)", sprite.flip_h)
+	check("north: a REAL back view, not the profile borrowed",
+		sprite.texture, RODENT.idle_back_sheet)
+	check_true("which is not any of the other three",
+		RODENT.idle_back_sheet != RODENT.idle_front_sheet
+			and RODENT.idle_back_sheet != RODENT.idle_left_sheet
+			and RODENT.idle_back_sheet != RODENT.idle_right_sheet)
+
+	section("the idle loop runs on simulation time, not the wall clock")
+	rat.facing = Vector2i.LEFT
+	rat.age = 0.0
+	view.sync(0.0, true)
+	var first := sprite.frame
+	# Real time passing changes nothing: only the creature getting older does.
+	view.sync(1.0, true)
+	check("a frame of real time does not advance it", sprite.frame, first)
+
+	rat.age = 1.0 / RODENT.idle_fps
+	view.sync(0.0, true)
+	check("one frame's worth of age does", sprite.frame,
+		posmod(first + 1, RODENT.idle_frames))
+
+	# Asked of the arithmetic directly. Sprite2D clamps frame numbers it is
+	# given, so reading the sprite back would report Godot's guard rather than
+	# whether this code kept the number inside the strip.
+	rat.age = 2000.0
+	check_between("the frame stays inside the strip however old it gets",
+		float(view._idle_frame(RODENT)), 0.0, float(RODENT.idle_frames - 1))
+	rat.age = 12345.678
+	check_between("still inside at any age",
+		float(view._idle_frame(RODENT)), 0.0, float(RODENT.idle_frames - 1))
+
+	section("a half-filled strip set does not count as animated")
+	var partial := CreatureSpecies.new()
+	partial.idle_frames = RODENT.idle_frames
+	partial.idle_front_sheet = RODENT.idle_front_sheet
+	check_false("front alone is not enough", partial.has_idle_sheets())
+	partial.idle_back_sheet = RODENT.idle_back_sheet
+	partial.idle_left_sheet = RODENT.idle_left_sheet
+	check_false("three of the four is still not enough", partial.has_idle_sheets())
+	partial.idle_right_sheet = RODENT.idle_right_sheet
+	check_true("all four is", partial.has_idle_sheets())
+	partial.idle_frames = 1
+	check_false("but one frame is nothing to play", partial.has_idle_sheets())
+
+	section("and creatures of the same age are not in lockstep")
+	var twin := Creature.new(8, RODENT, f, Vector2i(4, 2))
+	var twin_view: CreatureView = VIEW_SCENE.instantiate()
+	tree.root.add_child(twin_view)
+	twin_view.bind(twin)
+	twin.age = 0.0
+	rat.age = 0.0
+	view.sync(0.0, true)
+	twin_view.sync(0.0, true)
+	check_true("two rats born together breathe out of step",
+		twin_view.get_node("Sprite2D").frame != sprite.frame)
+	twin_view.queue_free()
 
 	var label: Label = view.get_node("Label")
 	check_true("label names the rodent", label.text.begins_with("Rodent #7"))
@@ -741,7 +798,7 @@ func _test_main_scene() -> void:
 	tree.root.add_child(main)
 	await frames(3)
 	var system: CreatureSystem = main._creatures
-	var layer: CreatureLayer = main.get_node("CreatureLayer")
+	var layer: CreatureLayer = main.get_node("World/CreatureLayer")
 	var dungeon: Dungeon = main._dungeon
 	check("no rodents at startup", system.get_creature_count(), 0)
 	check("no views drawn", layer.get_child_count(), 0)

@@ -20,6 +20,7 @@ const SUITES: Array[String] = [
 	"res://tests/test_system_3_food.gd",
 	"res://tests/test_system_4_pee.gd",
 	"res://tests/test_system_5_water.gd",
+	"res://tests/test_system_6_camera.gd",
 ]
 
 

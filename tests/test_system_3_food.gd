@@ -428,7 +428,7 @@ func _test_main_scene_wiring() -> void:
 	check("F drops food", food.get_count(), 2)
 	check_true("on a floored tile of this floor",
 		dungeon.is_walkable(food.get_sources()[0].grid_position))
-	var layer: FoodLayer = main.get_node("FoodLayer")
+	var layer: FoodLayer = main.get_node("World/FoodLayer")
 	check("a view per source", layer.get_child_count(), 2)
 	check_true("and it is visible", layer.get_view(food.get_sources()[0]).visible)
 

@@ -266,7 +266,7 @@ func _test_does_not_interrupt() -> void:
 	check("no puddle from a corpse", dead_floor.get_tile(Vector2i(1, 1)).pee_amount, 0.0)
 	# The system already skips the dead, so that check alone passes even if the
 	# model forgets. Ask the model directly, the way movement is asked.
-	doomed.reset_urination(0.0)
+	doomed.bladder = doomed.species.bladder_capacity
 	check_false("and the model itself says it is never due", doomed.is_urination_due())
 
 
@@ -356,7 +356,7 @@ func _test_main_scene() -> void:
 	_advance_to_daytime()
 	check_between("clock is daytime", float(GameTime.get_hour()), 9.0, 18.0)
 	var dungeon: Dungeon = main._dungeon
-	var layer: PeeLayer = main.get_node("PeeLayer")
+	var layer: PeeLayer = main.get_node("World/PeeLayer")
 	check("layer watches the starting floor", layer.current_floor, dungeon.get_current_floor())
 	check("nothing wet yet", layer.get_sprite_count(), 0)
 
